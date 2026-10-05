@@ -38,9 +38,64 @@ export const App: React.FC = () => {
     }
 
     const params = new URLSearchParams(window.location.search);
-    const roomParam = params.get('room');
+    const lastRoomId = sessionStorage.getItem('veil_last_active_room_id') || '';
+    const roomParam = (params.get('room') || lastRoomId).toUpperCase();
+
     if (roomParam) {
-      verifyAndLoadRoom(roomParam.toUpperCase());
+      // Check if this browser tab has an active room session for this room
+      const cachedSessionRaw = sessionStorage.getItem(`veil_active_room_${roomParam}`);
+      if (cachedSessionRaw) {
+        try {
+          const cachedSession = JSON.parse(cachedSessionRaw);
+          const now = Date.now();
+          // Verify room has not expired
+          if (
+            cachedSession.room &&
+            (!cachedSession.room.expiresAt || cachedSession.room.expiresAt > now)
+          ) {
+            console.log('[SESSION_RESTORED] Restoring active room session:', roomParam);
+            const validMessages = Array.isArray(cachedSession.messages)
+              ? cachedSession.messages.filter(
+                  (m: any) => m.isSaved || m.expiresAt > now
+                )
+              : [];
+
+            const restoredRoom = {
+              ...cachedSession.room,
+              messages: validMessages
+            };
+
+            setActiveRoom(restoredRoom);
+            if (cachedSession.currentUserId) setCurrentUserId(cachedSession.currentUserId);
+            if (cachedSession.currentUserName) setCurrentUserName(cachedSession.currentUserName);
+
+            // Re-init P2P mesh
+            if (cachedSession.isHost) {
+              p2pManager.initHost(roomParam, cachedSession.currentUserName || 'HOST');
+            } else {
+              p2pManager.initGuest(roomParam, cachedSession.currentUserName || 'GUEST');
+            }
+
+            // Re-join socket channel
+            socket.emit('room:join', {
+              roomId: roomParam,
+              username: cachedSession.currentUserName
+            });
+
+            // Ensure URL parameter is present
+            if (!params.get('room')) {
+              window.history.replaceState({}, '', `?room=${roomParam}`);
+            }
+
+            setCurrentView('chat_room');
+            return;
+          }
+        } catch (e) {
+          console.warn('[SESSION_RESTORE_PARSE_ERR]', e);
+        }
+      }
+
+      verifyAndLoadRoom(roomParam);
     }
 
     // Listener for accepted guest join
@@ -307,6 +362,12 @@ export const App: React.FC = () => {
   };
 
   const handleLeaveOrDestroy = () => {
+    if (activeRoom) {
+      try {
+        sessionStorage.removeItem(`veil_active_room_${activeRoom.id}`);
+        sessionStorage.removeItem('veil_last_active_room_id');
+      } catch {}
+    }
     setActiveRoom(null);
     window.history.replaceState({}, '', window.location.pathname);
     setCurrentView('landing');

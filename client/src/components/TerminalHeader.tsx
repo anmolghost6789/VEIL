@@ -90,6 +90,11 @@ export const TerminalHeader: React.FC<TerminalHeaderProps> = ({
               <span className="text-[10px] opacity-60">USERS:</span>
               <span className="font-bold text-cyber">{String(participantCount).padStart(2, '0')}/02</span>
             </div>
+
+            <div className="hidden xl:flex items-center gap-1 border border-acid/50 px-2 py-1 bg-acid/10 text-acid font-mono text-[10px] font-bold">
+              <Shield className="w-3 h-3 text-acid" />
+              <span>SHIELD: ARMED</span>
+            </div>
           </div>
         ) : (
           <div className="hidden sm:flex items-center gap-3">

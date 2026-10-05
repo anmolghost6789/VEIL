@@ -168,11 +168,11 @@ io.on('connection', (socket) => {
 
   // Send message
   socket.on('message:send', (payload, callback) => {
-    const { roomId, content, type, fileData, senderName } = payload;
+    const { roomId, content, type, fileData, senderName, messageId } = payload;
     const normRoomId = (roomId || '').toUpperCase();
     socket.join(normRoomId); // Ensure socket is subscribed to room channel!
 
-    const message = roomManager.addMessage(normRoomId, socket.id, content, type, fileData, senderName);
+    const message = roomManager.addMessage(normRoomId, socket.id, content, type, fileData, senderName, messageId);
 
     if (message) {
       io.to(normRoomId).emit('message:new', {

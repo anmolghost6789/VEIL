@@ -116,3 +116,39 @@
 .audio-bar:nth-child(3) { animation-delay: 0.3s; }
 .audio-bar:nth-child(4) { animation-delay: 0.45s; }
 .audio-bar:nth-child(5) { animation-delay: 0.2s; }
+
+/* Anti-Screenshot & Privacy Shield Styling */
+.no-select {
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
+
+/* Print Blackout Protection */
+@media print {
+  html, body, #root {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    overflow: hidden !important;
+  }
+}
+
+/* Privacy Blur Shield Transition */
+.privacy-blur-active {
+  filter: blur(35px) brightness(0.2) contrast(1.2);
+  pointer-events: none !important;
+  user-select: none !important;
+}
+
+.veil-shield-watermark {
+  background-image: repeating-linear-gradient(
+    -35deg,
+    rgba(255, 255, 255, 0.012),
+    rgba(255, 255, 255, 0.012) 80px,
+    transparent 80px,
+    transparent 160px
+  );
+}

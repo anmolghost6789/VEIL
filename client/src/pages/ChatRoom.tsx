@@ -30,8 +30,9 @@ import { RoomSettingsModal } from '../components/RoomSettingsModal';
 import { QrCodeModal } from '../components/QrCodeModal';
 import { StatusIndicator } from '../components/StatusIndicator';
 import { BrutalistButton } from '../components/BrutalistButton';
+import { ScreenshotShield } from '../components/ScreenshotShield';
 import { getSocket } from '../services/socket';
-import { playMessageReceive, playAlertChime } from '../services/audio';
+import { playMessageReceive, playMessageSend, playAlertChime } from '../services/audio';
 
 interface ChatRoomProps {
   room: RoomData;
@@ -50,7 +51,22 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
 }) => {
   const [room, setRoom] = useState<RoomData>(initialRoom);
   const [activeTool, setActiveTool] = useState<ActiveToolView>('chat');
-  const [messages, setMessages] = useState<EphemeralMessage[]>(initialRoom.messages || []);
+  const [messages, setMessages] = useState<EphemeralMessage[]>(() => {
+    try {
+      const saved = sessionStorage.getItem(`veil_active_room_${initialRoom.id}`);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed.messages)) {
+          const now = Date.now();
+          const valid = parsed.messages.filter(
+            (m: EphemeralMessage) => m.isSaved || m.expiresAt > now
+          );
+          if (valid.length > 0) return valid;
+        }
+      }
+    } catch {}
+    return initialRoom.messages || [];
+  });
   const [typingUser, setTypingUser] = useState<string | null>(null);
 
   // Modals & Panels
@@ -186,6 +202,10 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
 
     // Room destroyed
     const handleRoomDestroyed = () => {
+      try {
+        sessionStorage.removeItem(`veil_active_room_${room.id}`);
+        sessionStorage.removeItem('veil_last_active_room_id');
+      } catch {}
       alert('THIS ROOM HAS BEEN DESTROYED. ALL EPHEMERAL DATA WIPED.');
       onDestroyRoom();
     };
@@ -221,27 +241,83 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
     };
   }, [currentUserId, onDestroyRoom]);
 
-  // Actions
+  // Session Storage Synchronization for resilient page reloads
+  useEffect(() => {
+    try {
+      const now = Date.now();
+      const valid = messages.filter((m) => m.isSaved || m.expiresAt > now);
+      sessionStorage.setItem(
+        `veil_active_room_${room.id}`,
+        JSON.stringify({
+          room,
+          currentUserId,
+          currentUserName,
+          isHost,
+          messages: valid,
+          savedAt: now
+        })
+      );
+      sessionStorage.setItem('veil_last_active_room_id', room.id);
+    } catch (e) {
+      console.warn('[STORAGE_SYNC_ERR]', e);
+    }
+  }, [messages, room, currentUserId, currentUserName, isHost]);
+
+  // Actions (Optimistic 0ms UI Rendering)
   const handleSendMessage = (
     content: string,
     type: 'text' | 'gif' | 'file' | 'audio' = 'text',
     fileData?: any
   ) => {
-    const socket = getSocket();
-    socket.emit('message:send', {
+    const now = Date.now();
+    const tempId = `msg_${now}_${Math.random().toString(36).substring(2, 9)}`;
+
+    const optimisticMessage: EphemeralMessage = {
+      id: tempId,
       roomId: room.id,
+      senderId: currentUserId,
+      senderName: currentUserName,
       content,
       type,
       fileData,
-      senderName: currentUserName
-    }, (res: any) => {
-      if (res && res.success && res.message) {
-        setMessages((prev) => {
-          if (prev.some((m) => m.id === res.message.id)) return prev;
-          return [...prev, res.message];
-        });
-      }
+      createdAt: now,
+      expiresAt: now + (room.messageTtl || 60) * 1000,
+      isSaved: false
+    };
+
+    // Instant local append (0ms latency!)
+    setMessages((prev) => {
+      if (prev.some((m) => m.id === tempId)) return prev;
+      return [...prev, optimisticMessage];
     });
+
+    playMessageSend();
+
+    const socket = getSocket();
+    socket.emit(
+      'message:send',
+      {
+        roomId: room.id,
+        content,
+        type,
+        fileData,
+        senderName: currentUserName,
+        messageId: tempId
+      },
+      (res: any) => {
+        if (res && res.success && res.message) {
+          setMessages((prev) => {
+            if (res.message.id === tempId) {
+              return prev.map((m) => (m.id === tempId ? res.message : m));
+            }
+            if (prev.some((m) => m.id === res.message.id)) {
+              return prev.filter((m) => m.id !== tempId);
+            }
+            return prev.map((m) => (m.id === tempId ? res.message : m));
+          });
+        }
+      }
+    );
   };
 
   const handleTypingStart = () => {
@@ -315,9 +391,21 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
 
   const handleDestroyRoom = () => {
     if (window.confirm('WARNING: PERMANENTLY DESTROY ROOM AND TERMINATE ALL CONNECTIONS?')) {
+      try {
+        sessionStorage.removeItem(`veil_active_room_${room.id}`);
+        sessionStorage.removeItem('veil_last_active_room_id');
+      } catch {}
       getSocket().emit('room:destroy', { roomId: room.id });
       onDestroyRoom();
     }
+  };
+
+  const handleLeaveRoom = () => {
+    try {
+      sessionStorage.removeItem(`veil_active_room_${room.id}`);
+      sessionStorage.removeItem('veil_last_active_room_id');
+    } catch {}
+    onLeaveRoom();
   };
 
   const inviteUrl = `${window.location.origin}?room=${room.id}`;
@@ -332,19 +420,20 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
   const fileMessages = messages.filter((m) => m.type === 'file' && m.fileData);
 
   return (
-    <div className="flex flex-col h-screen w-full bg-ink text-offwhite overflow-hidden selection:bg-acid selection:text-ink">
-      {/* Top Terminal Header */}
-      <TerminalHeader
-        roomId={room.id}
-        roomStatus={room.participants.length >= 2 ? 'live' : 'waiting'}
-        participantCount={room.participants.length}
-        remainingTtlFormatted={`TTL ${String(Math.floor(room.messageTtl / 60)).padStart(2, '0')}:${String(
-          room.messageTtl % 60
-        ).padStart(2, '0')}`}
-        onOpenSettings={() => setShowSettings(true)}
-        onDestroyRoom={handleDestroyRoom}
-        onHomeClick={onLeaveRoom}
-      />
+    <ScreenshotShield roomId={room.id} currentUserName={currentUserName}>
+      <div className="flex flex-col h-screen w-full bg-ink text-offwhite overflow-hidden selection:bg-acid selection:text-ink">
+        {/* Top Terminal Header */}
+        <TerminalHeader
+          roomId={room.id}
+          roomStatus={room.participants.length >= 2 ? 'live' : 'waiting'}
+          participantCount={room.participants.length}
+          remainingTtlFormatted={`TTL ${String(Math.floor(room.messageTtl / 60)).padStart(2, '0')}:${String(
+            room.messageTtl % 60
+          ).padStart(2, '0')}`}
+          onOpenSettings={() => setShowSettings(true)}
+          onDestroyRoom={handleDestroyRoom}
+          onHomeClick={handleLeaveRoom}
+        />
 
       {/* Main Body Area */}
       <div className="flex-1 flex overflow-hidden relative">
@@ -749,6 +838,7 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
       {showQr && (
         <QrCodeModal roomId={room.id} onClose={() => setShowQr(false)} />
       )}
-    </div>
+      </div>
+    </ScreenshotShield>
   );
 };

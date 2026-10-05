@@ -212,7 +212,8 @@ export class RoomManager {
     content: string,
     type: 'text' | 'gif' | 'file' | 'audio' = 'text',
     fileData?: EphemeralMessage['fileData'],
-    senderNameFallback?: string
+    senderNameFallback?: string,
+    messageIdOverride?: string
   ): EphemeralMessage | null {
     let room = this.rooms.get(roomId);
     if (!room) {
@@ -242,7 +243,7 @@ export class RoomManager {
 
     const now = Date.now();
     const expiresAt = now + room.messageTtl * 1000;
-    const messageId = `msg_${now}_${Math.random().toString(36).substring(2, 9)}`;
+    const messageId = messageIdOverride || `msg_${now}_${Math.random().toString(36).substring(2, 9)}`;
 
     const message: EphemeralMessage = {
       id: messageId,

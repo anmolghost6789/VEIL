@@ -73,31 +73,41 @@ export const getSocket = (): UnifiedSocket => {
           const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : undefined;
 
           if (event === 'message:send') {
-            const { roomId, content, type, fileData } = payload;
-            const msg = p2pManager.sendMessage(roomId, content, type || 'text', 60, fileData);
+            const { roomId, content, type, fileData, messageId } = payload;
+            const msg = p2pManager.sendMessage(roomId, content, type || 'text', 60, fileData, messageId);
             if (callback) callback({ success: true, message: msg });
+          } else if (event === 'call:offer') {
+            p2pManager.sendRemote('call:offer', { offer: payload.offer, senderSocketId: 'remote_peer' });
+          } else if (event === 'call:answer') {
+            p2pManager.sendRemote('call:answer', { answer: payload.answer, senderSocketId: 'remote_peer' });
+          } else if (event === 'call:ice') {
+            p2pManager.sendRemote('call:ice', { candidate: payload.candidate, senderSocketId: 'remote_peer' });
+          } else if (event === 'call:end') {
+            p2pManager.sendRemote('call:ended', { senderSocketId: 'remote_peer' });
+          } else if (event === 'media:toggle') {
+            p2pManager.sendRemote('media:toggle', payload);
           } else if (event === 'whiteboard:draw') {
-            p2pManager.emit('whiteboard:draw', payload);
+            p2pManager.sendRemote('whiteboard:draw', payload);
           } else if (event === 'whiteboard:cursor') {
-            p2pManager.emit('whiteboard:cursor', payload);
+            p2pManager.sendRemote('whiteboard:cursor', payload);
           } else if (event === 'whiteboard:clear') {
-            p2pManager.emit('whiteboard:cleared', payload);
+            p2pManager.sendRemote('whiteboard:cleared', payload);
           } else if (event === 'typing:start') {
-            p2pManager.emit('typing:started', payload);
+            p2pManager.sendRemote('typing:started', payload);
           } else if (event === 'typing:stop') {
-            p2pManager.emit('typing:stopped', payload);
+            p2pManager.sendRemote('typing:stopped', payload);
           } else if (event === 'message:save_request') {
-            p2pManager.emit('message:save_request', payload);
+            p2pManager.sendRemote('message:save_request', payload);
           } else if (event === 'message:save_response') {
             if (payload?.approved) {
-              p2pManager.emit('message:save_approved', payload);
+              p2pManager.sendRemote('message:save_approved', payload);
             } else {
-              p2pManager.emit('message:save_denied', payload);
+              p2pManager.sendRemote('message:save_denied', payload);
             }
           } else if (event === 'room:join') {
             if (callback) callback({ success: true });
           } else {
-            p2pManager.emit(event, payload);
+            p2pManager.sendRemote(event, payload);
           }
         }
       }

@@ -1,7 +1,8 @@
 {
-  "name": "temp-server",
+  "name": "veil-server",
   "version": "1.0.0",
-  "description": "TEMP// Ephemeral Realtime Server",
+  "description": "VEIL// Ephemeral Realtime Server",
+  "type": "module",
   "main": "src/server.ts",
   "scripts": {
     "dev": "tsx watch src/server.ts",

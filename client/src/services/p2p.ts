@@ -36,6 +36,11 @@ class P2PManager {
     }
 
     // Remote dispatch over DataChannel
+    this.sendRemote(event, data);
+  }
+
+  // Send ONLY to remote peer over DataChannel (without triggering local listeners)
+  public sendRemote(event: string, data: any) {
     if (this.connection && this.connection.open) {
       try {
         this.connection.send({ event, data });
@@ -236,9 +241,16 @@ class P2PManager {
     }
   }
 
-  public sendMessage(roomId: string, content: string, type: 'text' | 'gif' | 'file' | 'audio', ttlSeconds: number, fileData?: any): EphemeralMessage {
+  public sendMessage(
+    roomId: string,
+    content: string,
+    type: 'text' | 'gif' | 'file' | 'audio',
+    ttlSeconds: number,
+    fileData?: any,
+    messageIdOverride?: string
+  ): EphemeralMessage {
     const now = Date.now();
-    const messageId = `msg_${now}_${Math.random().toString(36).substring(2, 9)}`;
+    const messageId = messageIdOverride || `msg_${now}_${Math.random().toString(36).substring(2, 9)}`;
 
     const message: EphemeralMessage = {
       id: messageId,

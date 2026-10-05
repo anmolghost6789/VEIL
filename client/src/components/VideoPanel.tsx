@@ -8,7 +8,8 @@ import {
   PhoneOff,
   Radio,
   PenTool,
-  MessageSquare
+  MessageSquare,
+  RefreshCw
 } from 'lucide-react';
 import { BrutalistButton } from './BrutalistButton';
 import { webrtcService } from '../services/webrtc';
@@ -43,6 +44,8 @@ export const VideoPanel: React.FC<VideoPanelProps> = ({
   useEffect(() => {
     let localStream: MediaStream | null = null;
 
+    const isSelfHost = participants.find((p) => p.socketId === currentUserId)?.isHost ?? false;
+
     const setupMedia = async () => {
       try {
         localStream = await webrtcService.startLocalMedia(true, true);
@@ -50,30 +53,47 @@ export const VideoPanel: React.FC<VideoPanelProps> = ({
           localVideoRef.current.srcObject = localStream;
         }
 
-        webrtcService.init(roomId, {
-          onRemoteStream: (stream) => {
-            console.log('[WEBRTC_UI] Binding remote stream');
-            if (remoteVideoRef.current) {
-              remoteVideoRef.current.srcObject = stream;
-              setHasRemoteVideo(true);
+        webrtcService.init(
+          roomId,
+          {
+            onRemoteStream: (stream) => {
+              console.log('[WEBRTC_UI] Binding remote stream, tracks:', stream.getTracks().length);
+              if (remoteVideoRef.current) {
+                remoteVideoRef.current.srcObject = stream;
+                setHasRemoteVideo(true);
+                remoteVideoRef.current.play().catch((err) => {
+                  console.warn('[AUTOPLAY_REMOTE_FAILED]', err);
+                });
+              }
+            },
+            onRemoteScreenStream: (stream) => {
+              if (remoteVideoRef.current) {
+                remoteVideoRef.current.srcObject = stream;
+                setHasRemoteVideo(true);
+                remoteVideoRef.current.play().catch(() => {});
+              }
+            },
+            onConnectionStateChange: (state) => {
+              console.log('[WEBRTC_UI] State:', state);
+              if (state === 'connected') {
+                setHasRemoteVideo(true);
+              }
+            },
+            onCallEnded: () => {
+              onEndCall();
             }
           },
-          onRemoteScreenStream: (stream) => {
-            if (remoteVideoRef.current) {
-              remoteVideoRef.current.srcObject = stream;
-              setHasRemoteVideo(true);
-            }
-          },
-          onConnectionStateChange: (state) => {
-            console.log('[WEBRTC_UI] State:', state);
-          },
-          onCallEnded: () => {
-            onEndCall();
-          }
-        });
+          !isSelfHost // Guest is polite (rolls back on collision)
+        );
 
-        // Trigger call negotiation
-        await webrtcService.startCall();
+        // Stagger call initiation so host offers first, or re-negotiates cleanly
+        setTimeout(async () => {
+          try {
+            await webrtcService.startCall();
+          } catch (e) {
+            console.warn('[CALL_INIT_RETRY]', e);
+          }
+        }, isSelfHost ? 150 : 800);
       } catch (err) {
         console.error('[MEDIA_INIT_FAILED]', err);
       }
@@ -124,6 +144,18 @@ export const VideoPanel: React.FC<VideoPanelProps> = ({
     const m = Math.floor(sec / 60);
     const s = sec % 60;
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
+
+  const [isResyncing, setIsResyncing] = useState(false);
+
+  const handleResyncSignal = async () => {
+    setIsResyncing(true);
+    try {
+      await webrtcService.startCall();
+    } catch (e) {
+      console.warn('[MANUAL_RESYNC_ERR]', e);
+    }
+    setTimeout(() => setIsResyncing(false), 1200);
   };
 
   const otherParticipant = participants.find((p) => p.socketId !== currentUserId);
@@ -179,6 +211,14 @@ export const VideoPanel: React.FC<VideoPanelProps> = ({
             <div className="text-[10px] text-offwhite/30 mt-3 font-mono">
               ENCRYPTED WebRTC PEER-TO-PEER CHANNEL
             </div>
+            <button
+              onClick={handleResyncSignal}
+              disabled={isResyncing}
+              className="mt-4 px-3 py-1.5 bg-ink-800 border border-acid text-acid hover:bg-acid hover:text-ink text-[11px] font-mono font-bold flex items-center justify-center gap-1.5 mx-auto transition-colors"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isResyncing ? 'animate-spin' : ''}`} />
+              <span>{isResyncing ? 'RE-SYNCING SIGNAL...' : 'RE-SYNC VIDEO STREAM'}</span>
+            </button>
           </div>
         )}
 

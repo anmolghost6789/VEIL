@@ -19,12 +19,18 @@ export class WebRTCService {
   private peerConnection: RTCPeerConnection | null = null;
   private localStream: MediaStream | null = null;
   private localScreenStream: MediaStream | null = null;
+  private remoteStream: MediaStream | null = null;
   private roomId: string | null = null;
   private callbacks: WebRTCCallbacks | null = null;
+  private isPolite: boolean = true;
+  private makingOffer: boolean = false;
+  private ignoreOffer: boolean = false;
+  private pendingIceCandidates: RTCIceCandidateInit[] = [];
 
-  public init(roomId: string, callbacks: WebRTCCallbacks) {
+  public init(roomId: string, callbacks: WebRTCCallbacks, isPolite: boolean = true) {
     this.roomId = roomId;
     this.callbacks = callbacks;
+    this.isPolite = isPolite;
     this.setupSocketListeners();
   }
 
@@ -47,11 +53,15 @@ export class WebRTCService {
     });
 
     socket.on('call:ice', async ({ candidate }) => {
-      if (candidate && this.peerConnection) {
+      if (!candidate) return;
+      const pc = this.createPeerConnection();
+      if (!pc.remoteDescription) {
+        this.pendingIceCandidates.push(candidate);
+      } else {
         try {
-          await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
         } catch (e) {
-          console.error('[WEBRTC] Error adding ICE candidate', e);
+          console.warn('[WEBRTC] Error adding ICE candidate', e);
         }
       }
     });
@@ -80,10 +90,18 @@ export class WebRTCService {
     };
 
     pc.ontrack = (event) => {
-      console.log('[WEBRTC] Received remote track', event.track.kind);
+      console.log('[WEBRTC] Received remote track:', event.track.kind, 'stream count:', event.streams.length);
       if (event.streams && event.streams[0]) {
-        this.callbacks?.onRemoteStream(event.streams[0]);
+        this.remoteStream = event.streams[0];
+      } else {
+        if (!this.remoteStream) {
+          this.remoteStream = new MediaStream();
+        }
+        if (!this.remoteStream.getTracks().some(t => t.id === event.track.id)) {
+          this.remoteStream.addTrack(event.track);
+        }
       }
+      this.callbacks?.onRemoteStream(this.remoteStream);
     };
 
     pc.onconnectionstatechange = () => {
@@ -109,6 +127,19 @@ export class WebRTCService {
       });
       this.localStream = stream;
 
+      // If peer connection already exists, add or update tracks
+      if (this.peerConnection) {
+        stream.getTracks().forEach((track) => {
+          const senders = this.peerConnection!.getSenders();
+          const existing = senders.find(s => s.track?.kind === track.kind);
+          if (existing) {
+            existing.replaceTrack(track);
+          } else {
+            this.peerConnection!.addTrack(track, stream);
+          }
+        });
+      }
+
       // Update media status
       getSocket().emit('media:toggle', {
         audio: audio,
@@ -124,38 +155,91 @@ export class WebRTCService {
   }
 
   public async startCall(): Promise<void> {
-    const pc = this.createPeerConnection();
-    const offer = await pc.createOffer({
-      offerToReceiveAudio: true,
-      offerToReceiveVideo: true
-    });
-    await pc.setLocalDescription(offer);
-
-    if (this.roomId) {
-      getSocket().emit('call:offer', {
-        roomId: this.roomId,
-        offer
+    try {
+      this.makingOffer = true;
+      const pc = this.createPeerConnection();
+      const offer = await pc.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: true
       });
+      if (pc.signalingState !== 'stable') return;
+      await pc.setLocalDescription(offer);
+
+      if (this.roomId) {
+        getSocket().emit('call:offer', {
+          roomId: this.roomId,
+          offer: pc.localDescription || offer
+        });
+      }
+    } catch (err) {
+      console.error('[WEBRTC_START_CALL_ERR]', err);
+    } finally {
+      this.makingOffer = false;
     }
   }
 
   private async handleOffer(offer: RTCSessionDescriptionInit): Promise<void> {
-    const pc = this.createPeerConnection();
-    await pc.setRemoteDescription(new RTCSessionDescription(offer));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
+    try {
+      const pc = this.createPeerConnection();
+      const isCollision = this.makingOffer || pc.signalingState !== 'stable';
+      this.ignoreOffer = !this.isPolite && isCollision;
+      if (this.ignoreOffer) {
+        console.log('[WEBRTC] Glare collision; impolite peer ignores incoming offer');
+        return;
+      }
 
-    if (this.roomId) {
-      getSocket().emit('call:answer', {
-        roomId: this.roomId,
-        answer
-      });
+      if (isCollision) {
+        console.log('[WEBRTC] Glare collision; polite peer rolling back local offer');
+        await pc.setLocalDescription({ type: 'rollback' });
+      }
+
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+
+      // Flush queued candidates
+      while (this.pendingIceCandidates.length > 0) {
+        const cand = this.pendingIceCandidates.shift();
+        if (cand) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(cand));
+          } catch (e) {
+            console.warn('[WEBRTC] Failed applying queued candidate:', e);
+          }
+        }
+      }
+
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      if (this.roomId) {
+        getSocket().emit('call:answer', {
+          roomId: this.roomId,
+          answer
+        });
+      }
+    } catch (err) {
+      console.error('[WEBRTC_HANDLE_OFFER_ERR]', err);
     }
   }
 
   private async handleAnswer(answer: RTCSessionDescriptionInit): Promise<void> {
-    if (this.peerConnection) {
-      await this.peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+    try {
+      if (this.peerConnection && this.peerConnection.signalingState === 'have-local-offer') {
+        await this.peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+
+        // Flush queued candidates
+        while (this.pendingIceCandidates.length > 0) {
+          const cand = this.pendingIceCandidates.shift();
+          if (cand) {
+            try {
+              await this.peerConnection.addIceCandidate(new RTCIceCandidate(cand));
+            } catch (e) {
+              console.warn('[WEBRTC] Failed applying queued candidate:', e);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[WEBRTC_HANDLE_ANSWER_ERR]', err);
     }
   }
 
@@ -244,10 +328,17 @@ export class WebRTCService {
       this.localScreenStream.getTracks().forEach(t => t.stop());
       this.localScreenStream = null;
     }
+    if (this.remoteStream) {
+      this.remoteStream.getTracks().forEach(t => t.stop());
+      this.remoteStream = null;
+    }
     if (this.peerConnection) {
       this.peerConnection.close();
       this.peerConnection = null;
     }
+    this.pendingIceCandidates = [];
+    this.makingOffer = false;
+    this.ignoreOffer = false;
   }
 }
 
