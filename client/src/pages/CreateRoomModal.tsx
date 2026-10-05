@@ -40,14 +40,19 @@ export const CreateRoomModal: React.FC<CreateRoomModalProps> = ({
 
   const handleCreate = async () => {
     setIsSubmitting(true);
-    const roomId = await onCreateRoom({
-      username: username.trim() || 'ANON_HOST',
-      messageTtl: selectedTtl,
-      roomTtlMinutes: 60
-    });
-    setIsSubmitting(false);
-    if (roomId) {
-      setCreatedRoomId(roomId);
+    try {
+      const roomId = await onCreateRoom({
+        username: username.trim() || 'ANON_HOST',
+        messageTtl: selectedTtl,
+        roomTtlMinutes: 60
+      });
+      if (roomId) {
+        setCreatedRoomId(roomId);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 

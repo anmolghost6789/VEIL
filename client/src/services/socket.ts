@@ -2,11 +2,17 @@ import { io, Socket } from 'socket.io-client';
 
 let socket: Socket | null = null;
 
+export const getServerBaseUrl = (): string => {
+  if (import.meta.env.VITE_SERVER_URL) {
+    return import.meta.env.VITE_SERVER_URL.replace(/\/$/, '');
+  }
+  const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  return isLocalhost ? 'http://localhost:3001' : window.location.origin;
+};
+
 export const getSocket = (): Socket => {
   if (!socket) {
-    // In dev, connect to port 3001 if on port 3000, or use window.location origin
-    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-    const serverUrl = isLocalhost ? 'http://localhost:3001' : window.location.origin;
+    const serverUrl = getServerBaseUrl();
 
     socket = io(serverUrl, {
       transports: ['websocket', 'polling'],
