@@ -1,12 +1,13 @@
 {
-  "name": "mesanger",
+  "name": "veil",
   "version": "1.0.0",
-  "description": "TEMP// Ephemeral Realtime Underground Communication Terminal",
+  "description": "VEIL// Ephemeral Realtime Underground Communication Terminal",
   "scripts": {
-    "install:all": "npm install --prefix server && npm install --prefix client",
+    "dev": "concurrently \"npm:dev:server\" \"npm:dev:client\"",
     "dev:server": "npm run dev --prefix server",
     "dev:client": "npm run dev --prefix client",
-    "dev": "npm run dev:server"
+    "build": "npm run build --prefix client",
+    "start": "npm run start --prefix server"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"
