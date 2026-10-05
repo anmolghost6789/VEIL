@@ -6,6 +6,7 @@ import { IncomingInviteScreen } from './components/IncomingInviteScreen';
 import { BrutalistButton } from './components/BrutalistButton';
 import { RoomData } from './types';
 import { getSocket, getServerBaseUrl } from './services/socket';
+import { p2pManager } from './services/p2p';
 import { ShieldAlert, Home } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -201,6 +202,7 @@ export const App: React.FC = () => {
   // Host enters room after sharing
   const handleEnterRoom = (roomId: string) => {
     setShowCreateModal(false);
+    p2pManager.initHost(roomId, currentUserName);
     window.history.pushState({}, '', `?room=${roomId}`);
     setCurrentView('chat_room');
   };
@@ -209,6 +211,11 @@ export const App: React.FC = () => {
   const handleGuestAccept = (guestUsername: string) => {
     const socket = getSocket();
     setCurrentUserName(guestUsername);
+
+    // Initialize P2P WebRTC DataChannel connection directly to host
+    p2pManager.initGuest(inviteRoomId, guestUsername).then((connected) => {
+      console.log('[P2P_GUEST_CONNECT_RESULT]', connected);
+    });
 
     let resolved = false;
     const timeout = setTimeout(() => {
