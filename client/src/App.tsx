@@ -249,7 +249,7 @@ export const App: React.FC = () => {
     }, 2000);
 
     socket.emit(
-      'room:join_request',
+      'room:join',
       {
         roomId: inviteRoomId,
         username: guestUsername
@@ -258,7 +258,11 @@ export const App: React.FC = () => {
         if (resolved) return;
         resolved = true;
         clearTimeout(timeout);
-        if (!res?.success) {
+        if (res && res.success && res.room) {
+          setActiveRoom(res.room);
+          setCurrentUserId(res.participant?.socketId || socket.id || 'guest');
+          setCurrentView('chat_room');
+        } else {
           const now = Date.now();
           const fallbackRoom: RoomData = {
             id: inviteRoomId,

@@ -100,7 +100,26 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Request to join room
+  // Direct join room or rejoin on mount
+  socket.on('room:join', (payload, callback) => {
+    const { roomId, username } = payload || {};
+    const normRoomId = (roomId || '').toUpperCase();
+    socket.join(normRoomId);
+    const result = roomManager.joinRoomDirect(normRoomId, socket.id, username);
+
+    if (result.success && result.room && result.participant) {
+      io.to(normRoomId).emit('room:user_joined', {
+        roomId: normRoomId,
+        participant: result.participant
+      });
+      console.log(`[USER_JOINED_DIRECT] ${result.participant.username} in room ${normRoomId}`);
+      if (callback) callback({ success: true, room: result.room, participant: result.participant });
+    } else {
+      if (callback) callback({ success: false, reason: result.reason });
+    }
+  });
+
+  // Request to join room (host approval flow)
   socket.on('room:join_request', (payload, callback) => {
     const { roomId, username } = payload || {};
     const normRoomId = (roomId || '').toUpperCase();
@@ -112,14 +131,15 @@ io.on('connection', (socket) => {
   // Host accepts join request
   socket.on('room:accept', (payload) => {
     const { roomId, requesterSocketId } = payload;
-    const room = roomManager.getRoom(roomId);
+    const normRoomId = (roomId || '').toUpperCase();
+    const room = roomManager.getRoom(normRoomId);
     if (!room) return;
 
-    const participant = roomManager.acceptJoin(roomId, socket.id, requesterSocketId);
+    const participant = roomManager.acceptJoin(normRoomId, socket.id, requesterSocketId);
     if (participant) {
       const targetSocket = io.sockets.sockets.get(requesterSocketId);
       if (targetSocket) {
-        targetSocket.join(roomId);
+        targetSocket.join(normRoomId);
         targetSocket.emit('room:accepted', {
           room: roomManager.serializeRoom(room),
           participant
@@ -127,34 +147,39 @@ io.on('connection', (socket) => {
       }
 
       // Notify whole room
-      io.to(roomId).emit('room:user_joined', {
-        roomId,
+      io.to(normRoomId).emit('room:user_joined', {
+        roomId: normRoomId,
         participant
       });
 
-      console.log(`[USER_JOINED] ${participant.username} joined room ${roomId}`);
+      console.log(`[USER_JOINED] ${participant.username} joined room ${normRoomId}`);
     }
   });
 
   // Host declines join request
   socket.on('room:decline', (payload) => {
     const { roomId, requesterSocketId } = payload;
-    const success = roomManager.declineJoin(roomId, socket.id, requesterSocketId);
+    const normRoomId = (roomId || '').toUpperCase();
+    const success = roomManager.declineJoin(normRoomId, socket.id, requesterSocketId);
     if (success) {
-      io.to(requesterSocketId).emit('room:declined', { roomId });
+      io.to(requesterSocketId).emit('room:declined', { roomId: normRoomId });
     }
   });
 
   // Send message
   socket.on('message:send', (payload, callback) => {
-    const { roomId, content, type, fileData } = payload;
-    const message = roomManager.addMessage(roomId, socket.id, content, type, fileData);
+    const { roomId, content, type, fileData, senderName } = payload;
+    const normRoomId = (roomId || '').toUpperCase();
+    socket.join(normRoomId); // Ensure socket is subscribed to room channel!
+
+    const message = roomManager.addMessage(normRoomId, socket.id, content, type, fileData, senderName);
 
     if (message) {
-      io.to(roomId).emit('message:new', {
-        roomId,
+      io.to(normRoomId).emit('message:new', {
+        roomId: normRoomId,
         message
       });
+      console.log(`[MSG_SENT] In ${normRoomId} by ${message.senderName}: "${content.substring(0, 30)}"`);
       if (callback) callback({ success: true, message });
     } else {
       if (callback) callback({ success: false, error: 'MESSAGE_SEND_FAILED' });

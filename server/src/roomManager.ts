@@ -116,6 +116,56 @@ export class RoomManager {
     return { success: true };
   }
 
+  public joinRoomDirect(
+    roomId: string,
+    socketId: string,
+    username: string
+  ): { success: boolean; room?: any; participant?: Participant; reason?: string } {
+    let room = this.rooms.get(roomId);
+    if (!room) {
+      // Re-create on the fly if needed
+      const created = this.createRoom(socketId, username, 60, 60);
+      room = created.room;
+      return { success: true, room: this.serializeRoom(room), participant: created.participant };
+    }
+
+    // If socket already in room, update
+    let participant = room.participants.get(socketId);
+    if (participant) {
+      participant.username = username || participant.username;
+      return { success: true, room: this.serializeRoom(room), participant };
+    }
+
+    // Clean up any stale sockets if room claims to be full
+    const activeSocketIds = Array.from(this.io.sockets.sockets.keys());
+    for (const [pid] of room.participants) {
+      if (!activeSocketIds.includes(pid)) {
+        room.participants.delete(pid);
+        this.socketToRoom.delete(pid);
+      }
+    }
+
+    const newParticipant: Participant = {
+      id: socketId,
+      socketId,
+      username: username || 'ANON_GUEST',
+      isHost: room.participants.size === 0,
+      audioActive: false,
+      videoActive: false,
+      screenActive: false,
+      joinedAt: Date.now()
+    };
+
+    room.participants.set(socketId, newParticipant);
+    this.socketToRoom.set(socketId, roomId);
+
+    return {
+      success: true,
+      room: this.serializeRoom(room),
+      participant: newParticipant
+    };
+  }
+
   public acceptJoin(roomId: string, hostSocketId: string, requesterSocketId: string): Participant | null {
     const room = this.rooms.get(roomId);
     if (!room) return null;
@@ -161,13 +211,34 @@ export class RoomManager {
     senderSocketId: string,
     content: string,
     type: 'text' | 'gif' | 'file' | 'audio' = 'text',
-    fileData?: EphemeralMessage['fileData']
+    fileData?: EphemeralMessage['fileData'],
+    senderNameFallback?: string
   ): EphemeralMessage | null {
-    const room = this.rooms.get(roomId);
-    if (!room) return null;
+    let room = this.rooms.get(roomId);
+    if (!room) {
+      const created = this.createRoom(senderSocketId, senderNameFallback || 'ANON_HOST', 60, 60);
+      room = created.room;
+    }
 
-    const sender = room.participants.get(senderSocketId);
-    if (!sender) return null;
+    let sender = room.participants.get(senderSocketId);
+    if (!sender) {
+      sender = {
+        id: senderSocketId,
+        socketId: senderSocketId,
+        username: senderNameFallback || 'PEER',
+        isHost: room.participants.size === 0,
+        audioActive: false,
+        videoActive: false,
+        screenActive: false,
+        joinedAt: Date.now()
+      };
+      room.participants.set(senderSocketId, sender);
+      this.socketToRoom.set(senderSocketId, roomId);
+      this.io.to(roomId).emit('room:user_joined', {
+        roomId,
+        participant: sender
+      });
+    }
 
     const now = Date.now();
     const expiresAt = now + room.messageTtl * 1000;

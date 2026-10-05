@@ -85,6 +85,14 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
   useEffect(() => {
     const socket = getSocket();
 
+    // Ensure socket is registered and joined into the room channel
+    socket.emit('room:join', { roomId: room.id, username: currentUserName });
+
+    const handleReconnect = () => {
+      socket.emit('room:join', { roomId: room.id, username: currentUserName });
+    };
+    socket.on('connect', handleReconnect);
+
     // New Message
     const handleNewMessage = ({ message }: { message: EphemeralMessage }) => {
       setMessages((prev) => {
@@ -219,11 +227,20 @@ export const ChatRoom: React.FC<ChatRoomProps> = ({
     type: 'text' | 'gif' | 'file' | 'audio' = 'text',
     fileData?: any
   ) => {
-    getSocket().emit('message:send', {
+    const socket = getSocket();
+    socket.emit('message:send', {
       roomId: room.id,
       content,
       type,
-      fileData
+      fileData,
+      senderName: currentUserName
+    }, (res: any) => {
+      if (res && res.success && res.message) {
+        setMessages((prev) => {
+          if (prev.some((m) => m.id === res.message.id)) return prev;
+          return [...prev, res.message];
+        });
+      }
     });
   };
 
